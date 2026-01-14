@@ -174,6 +174,14 @@ func InitCommands(c *Commands) {
 	})
 
 	c.Add(Command{
+		Prefix: "/lss",
+		Help:   "向AI提问",
+		Handler: func(room *Room, msg message.CommandMsg) error {
+
+		},
+	})
+
+	c.Add(Command{
 		Prefix: "/names",
 		Help:   "List users who are connected.",
 		Handler: func(room *Room, msg message.CommandMsg) error {
