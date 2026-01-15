@@ -3,12 +3,17 @@ package chat
 // FIXME: Would be sweet if we could piggyback on a cli parser or something.
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/shazow/ssh-chat/ai"
 	"github.com/shazow/ssh-chat/chat/message"
 	"github.com/shazow/ssh-chat/internal/sanitize"
 	"github.com/shazow/ssh-chat/set"
@@ -106,6 +111,58 @@ func init() {
 	InitCommands(defaultCommands)
 }
 
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (nopWriteCloser) Close() error { return nil }
+
+var lssBotMu sync.Mutex
+var lssBots = map[*Room]*message.User{}
+
+func ensureLssBot(room *Room) (*message.User, error) {
+	if room == nil {
+		return nil, errors.New("room is nil")
+	}
+
+	lssBotMu.Lock()
+	bot := lssBots[room]
+	lssBotMu.Unlock()
+
+	if member, ok := room.MemberByID("lss"); ok {
+		if bot == nil || member.User != bot {
+			return nil, errors.New("lss is already taken")
+		}
+		return bot, nil
+	}
+
+	if bot == nil {
+		bot = message.NewUserScreen(message.SimpleID("lss"), nopWriteCloser{Writer: ioutil.Discard})
+		cfg := bot.Config()
+		cfg.Echo = false
+		bot.SetConfig(cfg)
+		go bot.Consume()
+
+		lssBotMu.Lock()
+		lssBots[room] = bot
+		lssBotMu.Unlock()
+	}
+
+	if err := room.Members.Add(set.Itemize(bot.ID(), &Member{User: bot})); err != nil {
+		if err == set.ErrCollision {
+			if member, ok := room.MemberByID(bot.ID()); ok {
+				if member.User != bot {
+					return nil, errors.New("lss is already taken")
+				}
+				return bot, nil
+			}
+		}
+		return nil, err
+	}
+
+	return bot, nil
+}
+
 // InitCommands injects default commands into a Commands registry.
 func InitCommands(c *Commands) {
 	c.Add(Command{
@@ -175,9 +232,30 @@ func InitCommands(c *Commands) {
 
 	c.Add(Command{
 		Prefix: "/lss",
-		Help:   "向AI提问",
+		Help:   "chat with AI lss.",
 		Handler: func(room *Room, msg message.CommandMsg) error {
-
+			prompt := strings.TrimSpace(strings.TrimLeft(msg.Body(), "/lss"))
+			if prompt == "" {
+				return ErrMissingArg
+			}
+			from := msg.From()
+			bot, err := ensureLssBot(room)
+			if err != nil {
+				return err
+			}
+			go func() {
+				answer, err := ai.Ask(context.Background(), prompt)
+				if err != nil {
+					room.Send(message.NewSystemMsg(fmt.Sprintf("AI error: %v", err), from))
+					return
+				}
+				if answer == "" {
+					room.Send(message.NewSystemMsg("AI returned empty response.", from))
+					return
+				}
+				room.Send(message.NewPublicMsg(answer, bot))
+			}()
+			return nil
 		},
 	})
 

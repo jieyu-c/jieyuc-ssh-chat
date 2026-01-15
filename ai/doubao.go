@@ -2,53 +2,82 @@ package ai
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
+	"strings"
 
 	"github.com/volcengine/volcengine-go-sdk/service/arkruntime"
-	"github.com/volcengine/volcengine-go-sdk/service/arkruntime/model"
+	"github.com/volcengine/volcengine-go-sdk/service/arkruntime/model/responses"
 )
 
-func main() {
-	// 请确保您已将 API Key 存储在环境变量 ARK_API_KEY 中
-	// 初始化Ark客户端，从环境变量中读取您的API Key
-	client := arkruntime.NewClientWithApiKey(
-		// 从环境变量中获取您的 API Key。此为默认方式，您可根据需要进行修改
-		os.Getenv("ARK_API_KEY"),
-		// 此为默认路径，您可根据业务所在地域进行配置
-		arkruntime.WithBaseUrl("https://ark.cn-beijing.volces.com/api/v3"),
-	)
-	ctx := context.Background()
+const (
+	doubaoBaseURL = "https://ark.cn-beijing.volces.com/api/v3"
+	doubaoModel   = "ep-20260115103448-9764k"
+)
 
-	fmt.Println("----- image input -----")
-	req := model.CreateChatCompletionRequest{
-		// 指定您创建的方舟推理接入点 ID，此处已帮您修改为您的推理接入点 ID
-		Model: "doubao-seed-1-8-251228",
-		Messages: []*model.ChatCompletionMessage{
+func Ask(ctx context.Context, prompt string) (string, error) {
+	apiKey := os.Getenv("ARK_API_KEY")
+	if apiKey == "" {
+		return "", errors.New("missing ARK_API_KEY")
+	}
+
+	client := arkruntime.NewClientWithApiKey(
+		apiKey,
+		arkruntime.WithBaseUrl(doubaoBaseURL),
+	)
+
+	inputMessage := &responses.ItemInputMessage{
+		Role: responses.MessageRole_user,
+		Content: []*responses.ContentItem{
 			{
-				Role: model.ChatMessageRoleUser,
-				Content: &model.ChatCompletionMessageContent{
-					ListValue: []*model.ChatCompletionMessageContentPart{
-						{
-							Type: model.ChatCompletionMessageContentPartTypeImageURL,
-							ImageURL: &model.ChatMessageImageURL{
-								URL: "https://ark-project.tos-cn-beijing.ivolces.com/images/view.jpeg",
-							},
-						},
-						{
-							Type: model.ChatCompletionMessageContentPartTypeText,
-							Text: "这是哪里？",
-						},
+				Union: &responses.ContentItem_Text{
+					Text: &responses.ContentItemText{
+						Type: responses.ContentItemType_input_text,
+						Text: prompt,
 					},
 				},
 			},
 		},
 	}
 
-	resp, err := client.CreateChatCompletion(ctx, req)
+	resp, err := client.CreateResponses(ctx, &responses.ResponsesRequest{
+		Model: doubaoModel,
+		Input: &responses.ResponsesInput{
+			Union: &responses.ResponsesInput_ListValue{
+				ListValue: &responses.InputItemList{ListValue: []*responses.InputItem{{
+					Union: &responses.InputItem_InputMessage{
+						InputMessage: inputMessage,
+					},
+				}}},
+			},
+		},
+	})
 	if err != nil {
-		fmt.Printf("standard chat error: %v\n", err)
-		return
+		return "", err
 	}
-	fmt.Println(*resp.Choices[0].Message.Content.StringValue)
+
+	return extractText(resp), nil
+}
+
+func extractText(resp *responses.ResponseObject) string {
+	if resp == nil {
+		return ""
+	}
+
+	var parts []string
+	for _, item := range resp.Output {
+		output := item.GetOutputMessage()
+		if output == nil {
+			continue
+		}
+		for _, content := range output.Content {
+			text := content.GetText()
+			if text == nil || text.Text == "" {
+				continue
+			}
+			parts = append(parts, text.Text)
+		}
+	}
+
+	return strings.Join(parts, "")
 }
