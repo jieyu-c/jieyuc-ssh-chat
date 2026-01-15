@@ -243,6 +243,7 @@ func InitCommands(c *Commands) {
 			if err != nil {
 				return err
 			}
+			room.Send(message.NewPublicMsg("@lss "+prompt, from))
 			go func() {
 				answer, err := ai.Ask(context.Background(), prompt)
 				if err != nil {
