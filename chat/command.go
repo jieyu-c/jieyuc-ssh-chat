@@ -243,7 +243,25 @@ func InitCommands(c *Commands) {
 			if err != nil {
 				return err
 			}
-			room.Send(message.NewPublicMsg("@lss "+prompt, from))
+			cmdMsg := message.NewPublicMsg("@lss "+prompt, from)
+			room.history.Add(cmdMsg)
+			err = room.Members.Each(func(_ string, item set.Item) error {
+				user := item.Value().(*Member).User
+				if user == from {
+					return nil
+				}
+				if user.Ignored.In(from.ID()) {
+					return nil
+				}
+				err := user.Send(cmdMsg)
+				if err != nil {
+					return err
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
 			go func() {
 				answer, err := ai.Ask(context.Background(), prompt)
 				if err != nil {
